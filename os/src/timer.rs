@@ -17,6 +17,9 @@ pub fn get_time() -> usize {
     time::read()
 }
 
+// 1 millisecond = 1 × 10-3 seconds
+// 1 microsecond = 1 × 10-6 seconds
+
 /// get current time in milliseconds
 #[allow(dead_code)]
 pub fn get_time_ms() -> usize {
