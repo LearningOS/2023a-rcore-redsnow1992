@@ -15,14 +15,17 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+pub use task::{TaskControlBlock, TaskStatus, TaskInfo};
 
 pub use context::TaskContext;
+
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -140,6 +143,9 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            if inner.tasks[next].time == 0 {
+                inner.tasks[next].time = get_time_ms(); // mark as the first time
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -152,6 +158,43 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// count system calls
+    fn count_system_calls(&self, id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[id] += 1;
+    }
+
+    /// get task info
+    fn get_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        TaskInfo {
+            status: inner.tasks[current].task_status,
+            syscall_times: inner.tasks[current].syscall_times,
+            time: get_time_ms() - inner.tasks[current].time,
+        }
+    }
+
+    /// insert area
+    fn insert_area(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        if inner.tasks[current].memory_set.check_vrange(start_va, end_va) {
+            inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission);
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// unmap area
+    fn unmap_area(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.unmap_area(start_va, end_va)
     }
 }
 
@@ -201,4 +244,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// count system calls
+pub fn count_system_calls(id: usize) {
+    TASK_MANAGER.count_system_calls(id);
+}
+
+/// get task info
+pub fn get_task_info() -> TaskInfo {
+    TASK_MANAGER.get_task_info()
+}
+
+/// insert area
+pub fn insert_area(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> isize {
+    TASK_MANAGER.insert_area(start_va, end_va, permission)
+}
+
+/// unmap area
+pub fn unmap_area(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    TASK_MANAGER.unmap_area(start_va, end_va)
 }

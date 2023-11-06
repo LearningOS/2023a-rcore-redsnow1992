@@ -12,6 +12,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::arch::asm;
+use core::fmt::Debug;
 use lazy_static::*;
 use riscv::register::satp;
 
@@ -63,6 +64,28 @@ impl MemorySet {
             None,
         );
     }
+
+    /// check vrange
+    pub fn check_vrange(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+
+        !vpn_range.into_iter().any(|vpn|self.page_table.translate(vpn).map(|pte| pte.is_valid()).unwrap_or(false))
+    }
+
+    /// unmap area
+    pub fn unmap_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, MapPermission::R);
+        if let Some(idx) = self.areas.iter().position(|area| *area == map_area) {
+            map_area.unmap(&mut self.page_table);
+            self.areas.remove(idx);
+            0
+        } else {
+            -1
+        }
+    }
+
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
@@ -70,6 +93,7 @@ impl MemorySet {
         }
         self.areas.push(map_area);
     }
+
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
         self.page_table.map(
@@ -271,7 +295,15 @@ pub struct MapArea {
     map_perm: MapPermission,
 }
 
+impl PartialEq for MapArea {
+    fn eq(&self, other: &Self) -> bool {
+        self.vpn_range.get_start() == other.vpn_range.get_start() &&
+        self.vpn_range.get_end() == other.vpn_range.get_end()
+    }
+}
+
 impl MapArea {
+    /// new
     pub fn new(
         start_va: VirtAddr,
         end_va: VirtAddr,
@@ -287,6 +319,7 @@ impl MapArea {
             map_perm,
         }
     }
+    /// map_one
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         let ppn: PhysPageNum;
         match self.map_type {
@@ -303,24 +336,28 @@ impl MapArea {
         page_table.map(vpn, ppn, pte_flags);
     }
     #[allow(unused)]
+    /// unmap one
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         if self.map_type == MapType::Framed {
             self.data_frames.remove(&vpn);
         }
         page_table.unmap(vpn);
     }
+    /// map
     pub fn map(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
             self.map_one(page_table, vpn);
         }
     }
     #[allow(unused)]
+    /// unmap
     pub fn unmap(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
             self.unmap_one(page_table, vpn);
         }
     }
     #[allow(unused)]
+    /// shrink to
     pub fn shrink_to(&mut self, page_table: &mut PageTable, new_end: VirtPageNum) {
         for vpn in VPNRange::new(new_end, self.vpn_range.get_end()) {
             self.unmap_one(page_table, vpn)
@@ -328,6 +365,7 @@ impl MapArea {
         self.vpn_range = VPNRange::new(self.vpn_range.get_start(), new_end);
     }
     #[allow(unused)]
+    /// append to
     pub fn append_to(&mut self, page_table: &mut PageTable, new_end: VirtPageNum) {
         for vpn in VPNRange::new(self.vpn_range.get_end(), new_end) {
             self.map_one(page_table, vpn)
@@ -361,7 +399,9 @@ impl MapArea {
 #[derive(Copy, Clone, PartialEq, Debug)]
 /// map type for memory set: identical or framed
 pub enum MapType {
+    /// ident
     Identical,
+    /// framed
     Framed,
 }
 
