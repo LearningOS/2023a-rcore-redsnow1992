@@ -21,6 +21,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 #[allow(rustdoc::private_intra_doc_links)]
 mod task;
+mod stride;
 
 use crate::fs::{open_file, OpenFlags};
 use alloc::sync::Arc;
@@ -28,13 +29,13 @@ pub use context::TaskContext;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+pub use task::{TaskControlBlock, TaskStatus, TaskInfo};
 
 pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 pub use manager::add_task;
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
-    Processor,
+    Processor, count_system_calls, get_task_info, insert_area, unmap_area,
 };
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {

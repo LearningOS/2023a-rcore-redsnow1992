@@ -5,9 +5,12 @@
 //! and the replacement and transfer of control flow of different applications are executed.
 
 use super::__switch;
+use super::task::TaskInfo;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -43,7 +46,7 @@ impl Processor {
     ///Get current task in cloning semanteme
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
         self.current.as_ref().map(Arc::clone)
-    }
+    }    
 }
 
 lazy_static! {
@@ -61,6 +64,10 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
+            task_inner.update_stride();
+            if task_inner.time == 0 {
+                task_inner.time = get_time_ms();
+            }
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
@@ -108,4 +115,41 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+/// count system calls
+pub fn count_system_calls(id: usize) {
+    let binding = current_task().unwrap();
+    let mut task = binding.inner_exclusive_access();
+    task.syscall_times[id] += 1;
+}
+
+/// get task info
+pub fn get_task_info() -> TaskInfo {
+    let binding = current_task().unwrap();
+    let task = binding.inner_exclusive_access();
+    TaskInfo {
+        status: task.task_status,
+        syscall_times: task.syscall_times,
+        time: get_time_ms() - task.time,
+    }
+}
+
+/// insert area
+pub fn insert_area(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> isize {
+    let binding = current_task().unwrap();
+    let mut task = binding.inner_exclusive_access();
+    if task.memory_set.check_vrange(start_va, end_va) {
+        task.memory_set.insert_framed_area(start_va, end_va, permission);
+        0
+    } else {
+        -1
+    }
+}
+
+/// unmap area
+pub fn unmap_area(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    let binding = current_task().unwrap();
+    let mut task = binding.inner_exclusive_access();
+    task.memory_set.unmap_area(start_va, end_va)
 }
